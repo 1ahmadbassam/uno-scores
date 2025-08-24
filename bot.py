@@ -39,7 +39,7 @@ def get_latest_score() -> tuple[int, int]:
     current_content = contents.decoded_content.decode('utf-8').strip()
     
     lines = current_content.split('\n')
-    if len(lines) < 2: # Check if there's more than just the header
+    if len(lines) < 2:
         return 0, 0
 
     last_line = lines[-1]
@@ -154,21 +154,23 @@ async def score_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("No scores recorded yet\\.", parse_mode=ParseMode.MARKDOWN_V2)
             return
 
-        ratio = f"{score_a / score_i:.2f}:1" if score_i > 0 else "∞"
-        percent_a = f"{(score_a / total_score) * 100:.1f}%"
-        percent_i = f"{(score_i / total_score) * 100:.1f}%"
+        # CORRECTED: Escape the '.' in the formatted strings
+        ratio_str = f"{score_a / score_i:.2f}".replace('.', '\\.') + ":1" if score_i > 0 else "∞"
+        percent_a = f"{(score_a / total_score) * 100:.1f}".replace('.', '\\.') + "%"
+        percent_i = f"{(score_i / total_score) * 100:.1f}".replace('.', '\\.') + "%"
 
         stats_message = (
             f"📊 *Current Score Statistics*\n\n"
             f"🔹 *Score:* {score_a} \\- {score_i}\n"
-            f"🔸 *Ratio \\(A/I\\):* {ratio}\n"
+            f"🔸 *Ratio \\(A/I\\):* {ratio_str}\n"
             f"📈 *Point Share:*\n"
             f"    \\- Player A: {percent_a}\n"
             f"    \\- Player I: {percent_i}"
         )
         await update.message.reply_text(stats_message, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
-        await update.message.reply_text(f"An error occurred while fetching stats: `{e}`", parse_mode=ParseMode.MARKDOWN_V2)
+        error_text = str(e).replace('.', '\\.')
+        await update.message.reply_text(f"An error occurred while fetching stats: `{error_text}`", parse_mode=ParseMode.MARKDOWN_V2)
 
 # --- MAIN BOT SETUP ---
 def main() -> None:
