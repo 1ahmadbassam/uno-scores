@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Uno Score Analysis</title>
+    <title>Uno Scores Visualization</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -48,13 +48,13 @@
     <div class="container mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
         <div class="bg-white rounded-xl shadow-lg p-4 sm:p-6 lg:p-8">
             <div class="mb-8 text-center">
-                <h1 class="text-3xl sm:text-4xl font-bold text-gray-800">Uno Score Analysis</h1>
+                <h1 class="text-3xl sm:text-4xl font-bold text-gray-800">Uno Scores Visualization</h1>
                 <p class="text-gray-500 mt-2">An interactive dashboard analyzing the game from multiple perspectives.</p>
             </div>
 
             <div id="loading-indicator">
                 <div class="loader"></div>
-                <p class="text-center text-gray-500">Loading score data...</p>
+                <p class="text-center text-gray-500">Loading score data from scores.csv...</p>
             </div>
             
             <div id="charts-wrapper" class="hidden">
@@ -86,51 +86,42 @@
         // --- 1. Fetch and Parse Data ---
         async function loadData() {
             try {
-                const response = await fetch('scores.txt');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const rawData = await response.text();
+                const data = await d3.csv("scores.csv");
                 
-                const data = [];
-                let currentDateStr = "";
-                const year = "2025";
-                const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+                // Define a parser for the combined date and time string
+                const parseTime = d3.timeParse("%Y-%m-%d %H:%M");
 
-                rawData.trim().split('\n').forEach(line => {
-                    const trimmedLine = line.trim();
-                    if (!trimmedLine) return;
+                // Process each row
+                const processedData = data.map(d => {
+                    const scoreA = +d.score_a;
+                    const scoreI = +d.score_i;
+                    const dateTimeStr = `${d.date} ${d.time}`;
+                    const date = parseTime(dateTimeStr);
 
-                    const monthMatch = months.find(m => trimmedLine.startsWith(m));
-                    if (monthMatch) {
-                        currentDateStr = trimmedLine;
-                    } else {
-                        try {
-                            const parts = trimmedLine.split(/\s+/);
-                            const [scoreA, scoreI] = parts[0].split('-').map(Number);
-                            const date = d3.timeParse("%B %d %Y %H:%M")(`${currentDateStr} ${year} ${parts[1]}`);
-                            
-                            if (date && !isNaN(scoreA) && !isNaN(scoreI)) {
-                                const ratio = scoreI === 0 ? null : scoreA / scoreI;
-                                const totalPoints = scoreA + scoreI;
-                                const percentage = totalPoints === 0 ? 0 : (scoreA / totalPoints) * 100;
-                                data.push({ date, scoreA, scoreI, ratio, percentage });
-                            }
-                        } catch (e) {
-                            console.warn("Skipping malformed line:", line);
-                        }
+                    if (!date || isNaN(scoreA) || isNaN(scoreI)) {
+                        console.warn("Skipping malformed row:", d);
+                        return null;
                     }
-                });
+
+                    const ratio = scoreI === 0 ? null : scoreA / scoreI;
+                    const totalPoints = scoreA + scoreI;
+                    const percentage = totalPoints === 0 ? 0 : (scoreA / totalPoints) * 100;
+                    
+                    return { date, scoreA, scoreI, ratio, percentage };
+                }).filter(d => d !== null); // Filter out any null (malformed) rows
+
+                if (processedData.length === 0) {
+                    throw new Error("No valid data could be parsed from scores.csv.");
+                }
                 
-                // Hide loader and show charts
                 document.getElementById('loading-indicator').classList.add('hidden');
                 document.getElementById('charts-wrapper').classList.remove('hidden');
 
-                return data;
+                return processedData;
 
             } catch (error) {
-                document.getElementById('loading-indicator').innerHTML = `<p class="text-center text-red-500 font-semibold">Error: Could not load scores.txt. Make sure the file is in the same directory as this HTML file.</p>`;
-                console.error("Failed to fetch or parse scores.txt:", error);
+                document.getElementById('loading-indicator').innerHTML = `<p class="text-center text-red-500 font-semibold">Error: Could not load or parse scores.csv. Make sure the file exists, is in the same directory, and has the correct header (date,time,score_a,score_i).</p>`;
+                console.error("Failed to process scores.csv:", error);
                 return null;
             }
         }
@@ -161,7 +152,7 @@
                 const x = d3.scaleTime().domain(d3.extent(data, d => d.date)).range([0, width]);
                 const y = d3.scaleLinear().domain(yDomain(chartData)).range([height, 0]);
 
-                svg.append("g").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x).ticks(d3.timeMonth.every(1)).tickFormat(d3.timeFormat("%b")));
+                svg.append("g").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat("%b %Y")));
                 svg.append("g").call(d3.axisLeft(y).tickFormat(yFormat));
 
                 const line = d3.line().x(d => x(d.date)).y(d => y(yValue(d)));
@@ -183,7 +174,7 @@
                         
                         if (yValue(d) !== null) focus.attr("transform", `translate(${x(d.date)},${y(yValue(d))})`);
 
-                        tooltip.html(`<strong>${d3.timeFormat("%B %d, %H:%M")(d.date)}</strong><br/>A: ${d.scoreA} | I: ${d.scoreI}<br/>Ratio: ${d.ratio ? d.ratio.toFixed(2) : 'N/A'}<br/>A's Pct: ${d.percentage.toFixed(1)}%`)
+                        tooltip.html(`<strong>${d3.timeFormat("%b %d, %Y - %H:%M")(d.date)}</strong><br/>A: ${d.scoreA} | I: ${d.scoreI}<br/>Ratio: ${d.ratio ? d.ratio.toFixed(2) : 'N/A'}<br/>A's Pct: ${d.percentage.toFixed(1)}%`)
                         .style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
                     });
             }
@@ -204,7 +195,7 @@
                 const x = d3.scaleTime().domain(d3.extent(data, d => d.date)).range([0, width]);
                 const y = d3.scaleLinear().domain([0, d3.max(data, d => Math.max(d.scoreA, d.scoreI)) * 1.05]).range([height, 0]);
 
-                svg.append("g").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x).ticks(d3.timeMonth.every(1)).tickFormat(d3.timeFormat("%b")));
+                svg.append("g").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat("%b %Y")));
                 svg.append("g").call(d3.axisLeft(y));
 
                 svg.append("path").datum(data).attr("fill", "none").attr("stroke", "royalblue").attr("stroke-width", 2.5).attr("d", d3.line().x(d => x(d.date)).y(d => y(d.scoreA)));
@@ -231,7 +222,7 @@
                         const d = (data[i] && (x0 - data[i-1].date > data[i].date - x0)) ? data[i] : data[i-1];
                         focusA.attr("transform", `translate(${x(d.date)},${y(d.scoreA)})`);
                         focusI.attr("transform", `translate(${x(d.date)},${y(d.scoreI)})`);
-                        tooltip.html(`<strong>${d3.timeFormat("%B %d, %H:%M")(d.date)}</strong><br/><span style="color: royalblue;">Player A: ${d.scoreA}</span><br/><span style="color: crimson;">Player I: ${d.scoreI}</span>`)
+                        tooltip.html(`<strong>${d3.timeFormat("%b %d, %Y - %H:%M")(d.date)}</strong><br/><span style="color: royalblue;">Player A: ${d.scoreA}</span><br/><span style="color: crimson;">Player I: ${d.scoreI}</span>`)
                         .style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
                     });
             }
