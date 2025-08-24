@@ -25,11 +25,26 @@ PLAYER_I_ID = os.getenv('PLAYER_I_ID')
 FILE_PATH = 'scores.csv'
 BRANCH_NAME = 'master'
 
-# --- GITHUB AUTHENTICATION & FILE UPDATE LOGIC ---
+# --- GITHUB HELPER FUNCTIONS ---
 def get_github_instance() -> Github:
     private_key = RAW_PRIVATE_KEY.replace('\\n', '\n')
     auth = Auth.AppAuth(APP_ID, private_key).get_installation_auth(INSTALLATION_ID)
     return Github(auth=auth)
+
+def get_latest_score() -> tuple[int, int]:
+    """Fetches and returns the last score from the CSV file."""
+    g = get_github_instance()
+    repo = g.get_repo(GITHUB_REPO_NAME)
+    contents = repo.get_contents(FILE_PATH, ref=BRANCH_NAME)
+    current_content = contents.decoded_content.decode('utf-8').strip()
+    
+    lines = current_content.split('\n')
+    if len(lines) < 2: # Check if there's more than just the header
+        return 0, 0
+
+    last_line = lines[-1]
+    _, _, last_score_a, last_score_i = last_line.split(',')
+    return int(last_score_a), int(last_score_i)
 
 def update_csv_file(new_csv_line: str) -> tuple[bool, str | None]:
     try:
@@ -56,12 +71,12 @@ def update_csv_file(new_csv_line: str) -> tuple[bool, str | None]:
         return False, str(e)
 
 # --- TELEGRAM COMMAND HANDLERS ---
-async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def set_score_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or str(update.message.chat_id) != AUTHORIZED_CHAT_ID:
         return
     
     if not context.args:
-        await update.message.reply_text("Usage: `/score 142-91`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("Usage: `/setscore 142-91`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     score_text = context.args[0]
@@ -95,37 +110,20 @@ async def my_score_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     user_id = str(update.message.from_user.id)
-    player = None
-    if user_id == PLAYER_A_ID:
-        player = 'A'
-    elif user_id == PLAYER_I_ID:
-        player = 'I'
-    else:
+    player = 'A' if user_id == PLAYER_A_ID else 'I' if user_id == PLAYER_I_ID else None
+    if not player:
         await update.message.reply_text("You are not a registered player\\.", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     processing_message = await update.message.reply_text(f"Fetching last score for Player {player}...")
     
     try:
-        g = get_github_instance()
-        repo = g.get_repo(GITHUB_REPO_NAME)
-        contents = repo.get_contents(FILE_PATH, ref=BRANCH_NAME)
-        current_content = contents.decoded_content.decode('utf-8').strip()
-        
-        last_line = current_content.split('\n')[-1]
-        _, _, last_score_a, last_score_i = last_line.split(',')
-        
-        score_a, score_i = int(last_score_a), int(last_score_i)
-
-        if player == 'A':
-            score_a += 1
-        else: # Player I
-            score_i += 1
+        score_a, score_i = await asyncio.to_thread(get_latest_score)
+        score_a += 1 if player == 'A' else 0
+        score_i += 1 if player == 'I' else 0
             
         now = datetime.now()
-        date_str = now.strftime('%Y-%m-%d')
-        time_str = now.strftime('%H:%M')
-        new_csv_line = f"{date_str},{time_str},{score_a},{score_i}"
+        new_csv_line = f"{now.strftime('%Y-%m-%d')},{now.strftime('%H:%M')},{score_a},{score_i}"
 
         await processing_message.edit_text("Incrementing score on GitHub...")
         success, error_message = await asyncio.to_thread(update_csv_file, new_csv_line)
@@ -141,23 +139,50 @@ async def my_score_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             error_text = f"❌ Failed to increment score\\.\n*Error:* `{error_message}`"
             await processing_message.edit_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
-
     except Exception as e:
         await processing_message.edit_text(f"An error occurred: `{e}`", parse_mode=ParseMode.MARKDOWN_V2)
 
+async def score_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or str(update.message.chat_id) != AUTHORIZED_CHAT_ID:
+        return
+    
+    try:
+        score_a, score_i = await asyncio.to_thread(get_latest_score)
+        total_score = score_a + score_i
+
+        if total_score == 0:
+            await update.message.reply_text("No scores recorded yet\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            return
+
+        ratio = f"{score_a / score_i:.2f}:1" if score_i > 0 else "∞"
+        percent_a = f"{(score_a / total_score) * 100:.1f}%"
+        percent_i = f"{(score_i / total_score) * 100:.1f}%"
+
+        stats_message = (
+            f"📊 *Current Score Statistics*\n\n"
+            f"🔹 *Score:* {score_a} \\- {score_i}\n"
+            f"🔸 *Ratio \\(A/I\\):* {ratio}\n"
+            f"📈 *Point Share:*\n"
+            f"    \\- Player A: {percent_a}\n"
+            f"    \\- Player I: {percent_i}"
+        )
+        await update.message.reply_text(stats_message, parse_mode=ParseMode.MARKDOWN_V2)
+    except Exception as e:
+        await update.message.reply_text(f"An error occurred while fetching stats: `{e}`", parse_mode=ParseMode.MARKDOWN_V2)
 
 # --- MAIN BOT SETUP ---
 def main() -> None:
     """Start the bot."""
     if not all([TELEGRAM_TOKEN, GITHUB_REPO_NAME, APP_ID, INSTALLATION_ID, RAW_PRIVATE_KEY, AUTHORIZED_CHAT_ID, PLAYER_A_ID, PLAYER_I_ID]):
-        print("ERROR: Missing one or more environment variables. Please set all required variables.")
+        print("ERROR: Missing one or more environment variables.")
         return
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("score", score_command))
+    application.add_handler(CommandHandler("setscore", set_score_command))
     application.add_handler(CommandHandler("myscore", my_score_command))
+    application.add_handler(CommandHandler("score", score_stats_command))
 
-    print("@UnoScoresBot running...")
+    print("Bot is running with GitHub App authentication...")
     application.run_polling()
 
 if __name__ == '__main__':
